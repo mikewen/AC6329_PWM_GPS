@@ -134,9 +134,167 @@ void check_power_on_key(void)
 #endif
 }
 
+// Helper to store u16/u32 into the byte array (Little Endian)
+static void pack_u16(u8 *buf, u16 val) {
+    buf[0] = (u8)(val & 0xFF);
+    buf[1] = (u8)((val >> 8) & 0xFF);
+}
+
+static void pack_u32(u8 *buf, u32 val) {
+    buf[0] = (u8)(val & 0xFF);
+    buf[1] = (u8)((val >> 8) & 0xFF);
+    buf[2] = (u8)((val >> 16) & 0xFF);
+    buf[3] = (u8)((val >> 24) & 0xFF);
+}
+
+static s32 parse_numeric_signed(const char *s, u8 scale) {
+    s32 val = 0;
+    u8 dot_seen = 0, dec_places = 0;
+    s8 sign = 1;
+
+    if (*s == '-') { sign = -1; s++; }
+
+    while ((*s >= '0' && *s <= '9') || *s == '.') {
+        if (*s == '.') { dot_seen = 1; }
+        else {
+            val = val * 10 + (*s - '0');
+            if (dot_seen) dec_places++;
+        }
+        s++;
+    }
+    while (dec_places < scale) { val *= 10; dec_places++; }
+    while (dec_places > scale) { val /= 10; dec_places--; }
+    return val * sign;
+}
+
+
+static u8 gps_pkt[17];
+
+void parse_to_gps_pkt(const char *s) {
+    u8 field = 0;
+    bool is_rmc = (s[3] == 'R' && s[4] == 'M');     // $GNRMC -> 3rd='R', 4th='M'
+    bool is_tar = (s[3] == 'T' && s[6] == 'A');     // $PQTMTAR -> 3rd='T', 6th='A'
+
+    memset(gps_pkt, 0, 17);
+    if(is_rmc){
+        gps_pkt[0] = 0xA3;
+        //printf(s);
+    }else if(is_tar){
+        gps_pkt[0] = 0xA2;
+        //printf(s);
+    }
+    else return; // Safety exit
+
+    while (*s && *s != '*') {
+        if (*s == ',') {
+            field++;
+            s++;
+            if (*s == ',' || *s == '*') continue;
+
+            if (is_rmc) {
+                switch (field) {
+                    case 1: pack_u32(&gps_pkt[1],  (u32)parse_numeric_signed(s, 3)); break; // Time
+                    case 3: pack_u32(&gps_pkt[5],  (u32)parse_numeric_signed(s, 6)); break; // Lat
+                    case 5: pack_u32(&gps_pkt[9],  (u32)parse_numeric_signed(s, 6)); break; // Lon
+                    case 7: pack_u16(&gps_pkt[13], (u16)parse_numeric_signed(s, 2)); break; // Speed
+                    case 8: pack_u16(&gps_pkt[15], (u16)parse_numeric_signed(s, 2)); break; // Course
+                }
+            } else if (is_tar) {
+                switch (field) {
+                    case 2:  pack_u32(&gps_pkt[1],  (u32)parse_numeric_signed(s, 3)); break; // Time
+                    case 3:  gps_pkt[5]            = (u8)(*s - '0');                   break; // Qual
+                    case 5:  pack_u16(&gps_pkt[6],  (u16)parse_numeric_signed(s, 3)); break; // Len
+                    case 6:  pack_u16(&gps_pkt[8],  (s16)parse_numeric_signed(s, 2)); break; // Pitch
+                    case 7:  pack_u16(&gps_pkt[10], (s16)parse_numeric_signed(s, 2)); break; // Roll
+                    case 8:  pack_u16(&gps_pkt[12], (u16)parse_numeric_signed(s, 2)); break; // Head
+                    case 11: pack_u16(&gps_pkt[14], (u16)parse_numeric_signed(s, 3)); break; // Acc
+                    case 12: gps_pkt[16]           = (u8)parse_numeric_signed(s, 0);   break; // SV
+                }
+            }
+        }
+        s++;
+    }
+}
+
+#define MAX_NMEA_LEN 96
+static char g_nmea_buf[MAX_NMEA_LEN];
+static u8 g_buf_idx = 0;
+
+// Create a semaphore for RX notification
+UT_Semaphore rx_semaphore;
+
+static void my_uart_rx_callback(void *bus, u32 status){
+    if (status == UT_RX) {
+        // Notify a waiting task that data is ready
+        UT_OSSemPost(&rx_semaphore);
+    }
+}
+
+static uint8_t rx_buffer[512];   // must be 2^n (e.g., 64, 128, 256...)
+
+struct uart_platform_data_t uart_cfg = {
+    .tx_pin       = IO_PORTA_01 ,
+    .rx_pin       = IO_PORTA_02 ,
+    .rx_cbuf      = rx_buffer,
+    .rx_cbuf_size = sizeof(rx_buffer),
+    .frame_length = 1,          // interrupt after each byte (or desired threshold)
+    .rx_timeout   = 10,         // timeout in ms (for OT interrupt)
+    .isr_cbfun    = my_uart_rx_callback,
+    .argv         = NULL,       // optional user data passed to callback
+    .is_9bit      = 0,
+    .baud         = 115200,
+    // other fields (if any) should be zeroed
+};
+
+static void uart_rx_task(void *p_arg) {
+    uart_bus_t *bus = (uart_bus_t *)p_arg;
+    u8 byte;
+    bool capture = true;
+
+    while (1) {
+        UT_OSSemPend(&rx_semaphore, 0);
+
+        while (bus->getbyte(&byte, 0)) {
+            if (byte == '$') {
+                g_buf_idx = 0;
+                capture = true;
+            }
+
+            if (capture && g_buf_idx < sizeof(g_nmea_buf) - 1) {
+                g_nmea_buf[g_buf_idx++] = byte;
+
+                // Index 3 check: Must be 'R' (GNRMC) or 'T' (PQTMTAR)
+                if (g_buf_idx == 4) {
+                    if (g_nmea_buf[3] != 'R' && g_nmea_buf[3] != 'T') {
+                        capture = false;
+                    }
+                }
+
+                // Index 6 check: If it was 'T', must be 'A' (PQTMTAR)
+                if (capture && g_buf_idx == 7 && g_nmea_buf[3] == 'T') {
+                    if (g_nmea_buf[6] != 'A') {
+                        capture = false;
+                    }
+                }
+            }
+
+            if (capture && (byte == '\n' || byte == '\r')) {
+                g_nmea_buf[g_buf_idx] = '\0';
+                if (g_buf_idx > 10) {
+                    parse_to_gps_pkt(g_nmea_buf);
+                    trans_send_sensor_data(gps_pkt, 17);
+                }
+                g_buf_idx = 0;
+                capture = false;
+            }
+        }
+    }
+}
+
+
 int retval = -1;
 
-uint16_t readMS = 100;
+uint16_t readMS = 20;
 // Definition (storage allocated here)
 //volatile uint8_t mmc5603_raw[RAW_DATA_LEN];
 volatile uint8_t sensor_valid = 0;
@@ -223,9 +381,13 @@ static int mmc5603_read_regs(u8 reg, u8 *buf, int len) {
 }
 
 static int mmc5603_read_raw(u8 *raw) {
+    //mmc5603_write_reg(MMC5603_REG_CTRL0, 0x08);
+    //delay_2ms(1);
+    //delay_us_by_nop(1000);
     if (mmc5603_write_reg(MMC5603_REG_CTRL0, MMC5603_CTRL0_TM) != 0)
         return -1;
-    os_time_dly(1); //delay_2ms(2);  // Wait for conversion
+    //delay_2ms(2);  // Wait for conversion
+    delay_us_by_nop(2000);
     //os_time_dly(1);
     return mmc5603_read_regs(MMC5603_REG_XOUT0, raw, RAW_DATA_LEN);
 }
@@ -262,6 +424,9 @@ void init_mmc5603(){
     // 3. Configure CTRL0: Enable Auto Set/Reset (0x20) but keep CMM bits (0x10, 0x80) OFF
     mmc5603_write_reg(MMC5603_REG_CTRL0, 0x20);
     os_time_dly(1);
+
+    mmc5603_write_reg(MMC5603_REG_CTRL0, 0x08);
+    delay_2ms(1);
 }
 
 
@@ -484,10 +649,26 @@ void hw_iic_scan(hw_iic_dev iic)
 }
 */
 
+#define ReadIIC 1
+
 void app_main()
 {
-    void *timer_handle = NULL;
+    clk_set("sys",96*1000000);
 
+    UT_OSSemCreate(&rx_semaphore, 0);
+    const uart_bus_t *uart_bus = uart_dev_open(&uart_cfg);
+    int ret = os_task_create(
+        uart_rx_task,
+        (void *)uart_bus,
+        15,
+        128,                    // stack size in bytes (or words? check SDK docs)
+        0,                      // queue size (0 if not used)
+        "uart_rx"               // task name (for debugging)
+    );
+    //uart_bus->write("UART0\r\n",7);   //Write something to make sure works.
+
+#if ReadIIC
+    void *timer_handle = NULL;
     //hw_iic_bus_recover();
     retval = hw_iic_init(i2c_dev);
     if (retval != 0) {
@@ -511,6 +692,7 @@ void app_main()
             printf("Failed to create sensor timer");
         }
     }
+#endif // ReadIIC
 
     struct intent it;
 

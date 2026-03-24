@@ -35,9 +35,9 @@
 
 #if CONFIG_APP_SPP_LE
 
-#define RAW_DATA_LEN    6
-extern volatile uint8_t mmc5603_raw[RAW_DATA_LEN];
-extern volatile uint8_t sensor_valid;
+//#define RAW_DATA_LEN    6
+//extern volatile uint8_t mmc5603_raw[RAW_DATA_LEN];
+//extern volatile uint8_t sensor_valid;
 
 #if LE_DEBUG_PRINT_EN
 #define log_info(x, ...)  printf("[BLE_TRANS]" x " ", ## __VA_ARGS__)
@@ -1078,7 +1078,7 @@ void bt_ble_init(void)
     ble_comm_set_config_name(bt_get_local_name(), 1);
 #endif
 */
-    ble_comm_set_config_name("MMC5603QMI8658", 0);
+    ble_comm_set_config_name("GPS_PWM", 0);
     trans_con_handle = 0;
     trans_server_init();
 
