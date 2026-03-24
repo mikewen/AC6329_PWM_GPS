@@ -148,73 +148,96 @@ static void pack_u32(u8 *buf, u32 val) {
 }
 
 static s32 parse_numeric_signed(const char *s, u8 scale) {
-    s32 val = 0;
-    u8 dot_seen = 0, dec_places = 0;
+    s32 res = 0;
+    u8 dot_found = 0, digits_after_dot = 0;
     s8 sign = 1;
 
     if (*s == '-') { sign = -1; s++; }
 
     while ((*s >= '0' && *s <= '9') || *s == '.') {
-        if (*s == '.') { dot_seen = 1; }
-        else {
-            val = val * 10 + (*s - '0');
-            if (dot_seen) dec_places++;
+        if (*s == '.') {
+            dot_found = 1;
+        } else {
+            if (!dot_found) {
+                // Integer part: always accumulate
+                res = res * 10 + (*s - '0');
+            } else if (digits_after_dot < scale) {
+                // Fractional part: limit to 'scale' digits
+                res = res * 10 + (*s - '0');
+                digits_after_dot++;
+            }
+            // else: ignore extra fractional digits
         }
         s++;
     }
-    while (dec_places < scale) { val *= 10; dec_places++; }
-    while (dec_places > scale) { val /= 10; dec_places--; }
-    return val * sign;
+
+    // Scale up if not enough fractional digits
+    while (digits_after_dot < scale) {
+        res *= 10;
+        digits_after_dot++;
+    }
+
+    return res * sign;
 }
+
 
 
 static u8 gps_pkt[17];
 
 void parse_to_gps_pkt(const char *s) {
     u8 field = 0;
-    bool is_rmc = (s[3] == 'R' && s[4] == 'M');     // $GNRMC -> 3rd='R', 4th='M'
-    bool is_tar = (s[3] == 'T' && s[6] == 'A');     // $PQTMTAR -> 3rd='T', 6th='A'
+    // Check indices 3/4 and 3/6 specifically
+    bool is_rmc = (s[3] == 'R' && s[4] == 'M');
+    bool is_tar = (s[3] == 'T' && s[6] == 'A');
+    s32 temp_lat = 0, temp_lon = 0;
 
     memset(gps_pkt, 0, 17);
-    if(is_rmc){
-        gps_pkt[0] = 0xA3;
-        //printf(s);
-    }else if(is_tar){
-        gps_pkt[0] = 0xA2;
-        //printf(s);
-    }
-    else return; // Safety exit
+    if(is_rmc)      gps_pkt[0] = 0xA3;
+    else if(is_tar) gps_pkt[0] = 0xA2;
+    else return;
 
     while (*s && *s != '*') {
         if (*s == ',') {
             field++;
-            s++;
-            if (*s == ',' || *s == '*') continue;
+            // CRITICAL: Point to the start of the numeric data (the char after the comma)
+            const char *d = s + 1;
 
             if (is_rmc) {
                 switch (field) {
-                    case 1: pack_u32(&gps_pkt[1],  (u32)parse_numeric_signed(s, 3)); break; // Time
-                    case 3: pack_u32(&gps_pkt[5],  (u32)parse_numeric_signed(s, 6)); break; // Lat
-                    case 5: pack_u32(&gps_pkt[9],  (u32)parse_numeric_signed(s, 6)); break; // Lon
-                    case 7: pack_u16(&gps_pkt[13], (u16)parse_numeric_signed(s, 2)); break; // Speed
-                    case 8: pack_u16(&gps_pkt[15], (u16)parse_numeric_signed(s, 2)); break; // Course
+                    case 1: pack_u32(&gps_pkt[1], (u32)parse_numeric_signed(d, 3)); break;
+                    case 3: temp_lat = parse_numeric_signed(d, 4); break;
+                    case 4:
+                        if (*d == 'S') temp_lat = -temp_lat;
+                        pack_u32(&gps_pkt[5], (u32)temp_lat);
+                        //if (temp_lat != 0) printf("DEBUG Lat: %d\r\n", (int)temp_lat);
+                        break;
+                    case 5: temp_lon = parse_numeric_signed(d, 4); break;
+                    case 6:
+                        if (*d == 'W') temp_lon = -temp_lon;
+                        pack_u32(&gps_pkt[9], (u32)temp_lon);
+                        //if (temp_lon != 0) printf("DEBUG Lon: %d\r\n", (int)temp_lon);
+                        break;
+                    case 7: pack_u16(&gps_pkt[13], (u16)parse_numeric_signed(d, 2)); break;
+                    case 8: pack_u16(&gps_pkt[15], (u16)parse_numeric_signed(d, 2)); break;
                 }
             } else if (is_tar) {
                 switch (field) {
-                    case 2:  pack_u32(&gps_pkt[1],  (u32)parse_numeric_signed(s, 3)); break; // Time
-                    case 3:  gps_pkt[5]            = (u8)(*s - '0');                   break; // Qual
-                    case 5:  pack_u16(&gps_pkt[6],  (u16)parse_numeric_signed(s, 3)); break; // Len
-                    case 6:  pack_u16(&gps_pkt[8],  (s16)parse_numeric_signed(s, 2)); break; // Pitch
-                    case 7:  pack_u16(&gps_pkt[10], (s16)parse_numeric_signed(s, 2)); break; // Roll
-                    case 8:  pack_u16(&gps_pkt[12], (u16)parse_numeric_signed(s, 2)); break; // Head
-                    case 11: pack_u16(&gps_pkt[14], (u16)parse_numeric_signed(s, 3)); break; // Acc
-                    case 12: gps_pkt[16]           = (u8)parse_numeric_signed(s, 0);   break; // SV
+                    case 2:  pack_u32(&gps_pkt[1],  (u32)parse_numeric_signed(d, 3)); break;    // Time
+                    case 3:  gps_pkt[5]            = (u8)(*d - '0');                   break;   // Quality
+                    case 5:  pack_u16(&gps_pkt[6],  (u16)parse_numeric_signed(d, 3)); break;    //baseline
+                    case 6:  pack_u16(&gps_pkt[8],  (s16)parse_numeric_signed(d, 2)); break;    // Pitch
+                    case 7:  pack_u16(&gps_pkt[10], (s16)parse_numeric_signed(d, 2)); break;    // Roll
+                    case 8:  pack_u16(&gps_pkt[12], (u16)parse_numeric_signed(d, 2)); break;    // Heading
+                    case 11: pack_u16(&gps_pkt[14], (u16)parse_numeric_signed(d, 3)); break;    // Acc_heading
+                    case 12: gps_pkt[16]           = (u8)parse_numeric_signed(d, 0);   break;   //SV
                 }
             }
         }
-        s++;
+        s++; // This s++ is what was causing the pointer to move during parsing
     }
 }
+
+
 
 #define MAX_NMEA_LEN 96
 static char g_nmea_buf[MAX_NMEA_LEN];
