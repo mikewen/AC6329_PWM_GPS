@@ -17,6 +17,9 @@
 
 #define CONFIG_DEBUG_ENABLE
 
+#define IMU 0
+#define GPS 1
+
 //#define TCFG_MEDIA_LIB_USE_MALLOC		    1
 #define TCFG_MEDIA_LIB_USE_MALLOC		    0
 //apps example 选择,只能选1个,要配置对应的board_config.h

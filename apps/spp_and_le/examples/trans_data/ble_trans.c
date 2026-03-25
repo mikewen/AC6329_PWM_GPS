@@ -1065,7 +1065,10 @@ static void trans_send_sensor_data(u8 *data, u8 len)
  */
 /*************************************************************************************************/
 
+#if IMU
 extern readMS;
+#endif // IMU
+
 void bt_ble_init(void)
 {
     log_info("%s\n", __FUNCTION__);
@@ -1098,11 +1101,13 @@ void bt_ble_init(void)
 
     ble_module_enable(1);
 
+#if IMU
     //wdt_close();
     // Add periodic sensor notification timer, readMS
     sys_timer_add(0, trans_send_sensor_data, readMS);
     //sys_timer_add(0, trans_send_sensor_data, 200); // as long as < readMS
     //sys_s_hi_timer_add(NULL, trans_send_sensor_data, 100); // as long as < readMS
+#endif // IMU
 
 #if TEST_TRANS_CHANNEL_DATA
     if (TEST_TRANS_TIMER_MS < 10) {

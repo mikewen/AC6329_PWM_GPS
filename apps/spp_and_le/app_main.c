@@ -181,7 +181,7 @@ static s32 parse_numeric_signed(const char *s, u8 scale) {
 }
 
 
-
+#if GPS
 static u8 gps_pkt[17];
 
 void parse_to_gps_pkt(const char *s) {
@@ -313,8 +313,9 @@ static void uart_rx_task(void *p_arg) {
         }
     }
 }
+#endif // GPS
 
-
+#if IMU
 int retval = -1;
 
 uint16_t readMS = 20;
@@ -672,12 +673,17 @@ void hw_iic_scan(hw_iic_dev iic)
 }
 */
 
-#define ReadIIC 1
+#endif // IMU
+
+//#define ReadIIC 1
 
 void app_main()
 {
+
+//#if GPS
     clk_set("sys",96*1000000);
 
+#if GPS
     UT_OSSemCreate(&rx_semaphore, 0);
     const uart_bus_t *uart_bus = uart_dev_open(&uart_cfg);
     int ret = os_task_create(
@@ -689,8 +695,9 @@ void app_main()
         "uart_rx"               // task name (for debugging)
     );
     //uart_bus->write("UART0\r\n",7);   //Write something to make sure works.
+#endif // GPS
 
-#if ReadIIC
+#if IMU
     void *timer_handle = NULL;
     //hw_iic_bus_recover();
     retval = hw_iic_init(i2c_dev);
@@ -715,7 +722,7 @@ void app_main()
             printf("Failed to create sensor timer");
         }
     }
-#endif // ReadIIC
+#endif // Read IMU via IIC
 
     struct intent it;
 
