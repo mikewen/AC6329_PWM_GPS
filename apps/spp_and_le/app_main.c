@@ -404,6 +404,7 @@ static int mmc5603_read_regs(u8 reg, u8 *buf, int len) {
     return read_len;
 }
 
+/*
 static int mmc5603_read_raw(u8 *raw) {
     //mmc5603_write_reg(MMC5603_REG_CTRL0, 0x08);
     //delay_2ms(1);
@@ -414,6 +415,34 @@ static int mmc5603_read_raw(u8 *raw) {
     delay_us_by_nop(2000);
     //os_time_dly(1);
     return mmc5603_read_regs(MMC5603_REG_XOUT0, raw, RAW_DATA_LEN);
+}
+*/
+static inline int mmc5603_read_raw(u8 *raw) {
+    return mmc5603_read_regs(MMC5603_REG_XOUT0, raw, RAW_DATA_LEN);
+}
+
+static inline int mmc5603_read_raw_fast(u8 *buf)
+{
+    hw_iic_start(i2c_dev);
+
+    if (!hw_iic_tx_byte(i2c_dev, (MMC5603_ADDR << 1) | 0)) goto err;
+    if (!hw_iic_tx_byte(i2c_dev, MMC5603_REG_XOUT0)) goto err;
+
+    hw_iic_start(i2c_dev);  // repeated start (better than stop/start if supported)
+
+    if (!hw_iic_tx_byte(i2c_dev, (MMC5603_ADDR << 1) | 1)) goto err;
+
+    for (int i = 0; i < RAW_DATA_LEN; i++) {
+        u8 ack = (i < RAW_DATA_LEN - 1) ? 1 : 0;
+        buf[i] = hw_iic_rx_byte(i2c_dev, ack);
+    }
+
+    hw_iic_stop(i2c_dev);
+    return RAW_DATA_LEN;
+
+err:
+    hw_iic_stop(i2c_dev);
+    return -1;
 }
 
 /*
@@ -442,22 +471,27 @@ void init_mmc5603(){
     os_time_dly(1);
 
     // 2. Disable CMM in CTRL2 (Set bit 4 to 0)
-    mmc5603_write_reg(MMC5603_REG_CTRL2, 0x00);
-    os_time_dly(1);
-
-    // 3. Configure CTRL0: Enable Auto Set/Reset (0x20) but keep CMM bits (0x10, 0x80) OFF
-    mmc5603_write_reg(MMC5603_REG_CTRL0, 0x20);
+    //mmc5603_write_reg(MMC5603_REG_CTRL2, 0x00);
+    mmc5603_write_reg(MMC5603_REG_CTRL2, 0x10); // CMM ON, Enable Continuous Mode
     os_time_dly(1);
 
     mmc5603_write_reg(MMC5603_REG_CTRL0, 0x08);
     delay_2ms(1);
+
+    mmc5603_write_reg(MMC5603_REG_ODR, 0x32);  // ~50 Hz
+    delay_2ms(1);
+
+    // Configure CTRL0: Enable Auto Set/Reset (0x20) but keep CMM bits (0x10, 0x80) OFF
+    mmc5603_write_reg(MMC5603_REG_CTRL0, 0x20);
+    os_time_dly(1);
 }
 
 
 u8 read_mmc5603_to_buffer()
 {
     u8 raw[RAW_DATA_LEN];
-    int ret = mmc5603_read_raw(raw);
+    //int ret = mmc5603_read_raw(raw);
+    int ret = mmc5603_read_raw_fast(raw);
     clr_wdt();
     if (ret == RAW_DATA_LEN) {
         sensor_valid = 1;
