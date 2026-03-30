@@ -260,7 +260,8 @@ struct uart_platform_data_t uart_cfg = {
     .rx_pin       = IO_PORTA_02 ,
     .rx_cbuf      = rx_buffer,
     .rx_cbuf_size = sizeof(rx_buffer),
-    .frame_length = 1,          // interrupt after each byte (or desired threshold)
+    //.frame_length = 1,          // interrupt after each byte (or desired threshold)
+    .frame_length = 16,
     .rx_timeout   = 10,         // timeout in ms (for OT interrupt)
     .isr_cbfun    = my_uart_rx_callback,
     .argv         = NULL,       // optional user data passed to callback
@@ -322,6 +323,7 @@ uint16_t readMS = 20;
 // Definition (storage allocated here)
 //volatile uint8_t mmc5603_raw[RAW_DATA_LEN];
 volatile uint8_t sensor_valid = 0;
+static u8 mmc5603_read_counter = 0;
 
 /* Global packed BLE packet */
 static u8  ble_pkt[20];
@@ -478,7 +480,9 @@ void init_mmc5603(){
     mmc5603_write_reg(MMC5603_REG_CTRL0, 0x08);
     delay_2ms(1);
 
-    mmc5603_write_reg(MMC5603_REG_ODR, 0x32);  // ~50 Hz
+    //mmc5603_write_reg(MMC5603_REG_ODR, 0x32);  // ~50 Hz
+    // CHANGE: Set ODR to 10 Hz (0x0A) instead of 50 Hz (0x32)
+    mmc5603_write_reg(MMC5603_REG_ODR, 0x0A);  // ~10 Hz (was 0x32 for 50Hz)
     delay_2ms(1);
 
     // Configure CTRL0: Enable Auto Set/Reset (0x20) but keep CMM bits (0x10, 0x80) OFF
@@ -667,7 +671,15 @@ static void sensor_timer_cb(void *priv)
     clr_wdt();
 
     /* 1. MMC5603 first — slow, triggers measurement */
-    read_mmc5603_to_buffer();  /* updates mx_raw/my_raw/mz_raw */
+    //read_mmc5603_to_buffer();  /* updates mx_raw/my_raw/mz_raw */
+    /* Increment counter for MMC5603 sampling control */
+    mmc5603_read_counter++;
+
+    /* 1. MMC5603 - Read only every 5th call (10 Hz from 50 Hz base) */
+    if (mmc5603_read_counter >= 5) {
+        mmc5603_read_counter = 0;
+        read_mmc5603_to_buffer();  /* updates mx_raw/my_raw/mz_raw */
+    }
 
     /* 2. QMI8658C — fast burst read */
     u8 raw[12];
@@ -723,7 +735,7 @@ void app_main()
     int ret = os_task_create(
         uart_rx_task,
         (void *)uart_bus,
-        15,
+        5,
         128,                    // stack size in bytes (or words? check SDK docs)
         0,                      // queue size (0 if not used)
         "uart_rx"               // task name (for debugging)

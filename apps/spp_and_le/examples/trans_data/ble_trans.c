@@ -143,11 +143,20 @@ static const char user_tag_string[] = {
     0xd6, 0x05, 0x08, 0x00, 'J', 'L', 'A', 'I', 'S', 'D', 'K'
 };
 
+/*
 static const struct conn_update_param_t trans_connection_param_table[] = {
     {16, 24, 10, 600},
     {12, 28, 10, 600},
     {8,  20, 10, 600},
 };
+*/
+// Optimize connection parameters for speed
+static const struct conn_update_param_t trans_connection_param_table[] = {
+    {6,  12,  0, 500},   // 7.5ms interval (fastest allowed)
+    {6,  12,  0, 500},
+    {6,  12,  0, 500},
+};
+
 #define CONN_PARAM_TABLE_CNT \
     (sizeof(trans_connection_param_table) / sizeof(struct conn_update_param_t))
 
