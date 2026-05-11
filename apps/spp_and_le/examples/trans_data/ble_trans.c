@@ -743,8 +743,8 @@ void bt_ble_init(void)
     trans_con_handle = 0;
 
     /* Device name reflects default mode */
-    //ble_comm_set_config_name("ESC_PWM", 0);
-    ble_comm_set_config_name("GPS_PWM", 0);
+    //ble_comm_set_config_name("GPS_PWM", 0);
+    ble_comm_set_config_name("IMU_GPS", 0);
 
     trans_server_init();
 

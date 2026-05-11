@@ -29,6 +29,7 @@
 const struct hw_iic_config hw_iic_cfg[IIC_HW_NUM] = {
     {
         // I2C0 (the only one on AC6328)
+        //.port     = {IO_PORT_DP, IO_PORT_DM},
         .port     = {IO_PORTA_07, IO_PORTA_08}, // SCL, SDA pins – CHANGE THESE TO MATCH YOUR BOARD
         .baudrate = 100000,                     // 100 kHz (or 400000 for fast mode)
         //.baudrate = 200000,

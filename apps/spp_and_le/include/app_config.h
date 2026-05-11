@@ -17,7 +17,7 @@
 
 #define CONFIG_DEBUG_ENABLE
 
-#define IMU 0
+#define IMU 1
 #define GPS 1
 
 //#define TCFG_MEDIA_LIB_USE_MALLOC		    1
